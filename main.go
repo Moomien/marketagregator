@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os/exec"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -139,20 +139,21 @@ func searchProducts(query string) ([]models.Product, error) {
 		defer wg.Done()
 		itemsOzon, errOzon = ozon.Parse(query)
 		if errOzon != nil {
-			fmt.Println("[OZON] стартую фолбэк")
-			cmd := exec.Command("python3", "./adapters/ozon/fallback.py", query)
-			output, err := cmd.Output()
-			if err != nil {
-				errOzon = fmt.Errorf("[OZON] Ошибка запуска скрипта:%w", err)
-			}
-			if len(output) == 0 {
-				errOzon = fmt.Errorf("[OZON] Скрипт вернул пустой вывод")
-			}
-			err = json.Unmarshal(output, &itemsOzon)
-			if err != nil {
-				errOzon = fmt.Errorf("[OZON] Не удалось десериализовать %w", err)
-			}
-			fmt.Printf("[OZON] Python фолбэк вернул %d товаров:", len(itemsOzon))
+			// fmt.Println("[OZON] стартую фолбэк")
+			// cmd := exec.Command("python3", "./adapters/ozon/fallback.py", query)
+			// output, err := cmd.Output()
+			// if err != nil {
+			// 	errOzon = fmt.Errorf("[OZON] Ошибка запуска скрипта:%w", err)
+			// }
+			// if len(output) == 0 {
+			// 	errOzon = fmt.Errorf("[OZON] Скрипт вернул пустой вывод")
+			// }
+			// err = json.Unmarshal(output, &itemsOzon)
+			// if err != nil {
+			// 	errOzon = fmt.Errorf("[OZON] Не удалось десериализовать %w", err)
+			// }
+			// fmt.Printf("[OZON] Python фолбэк вернул %d товаров:", len(itemsOzon))
+			return
 		}
 	}()
 
@@ -218,6 +219,10 @@ func main() {
 	initRedis()
 	http.HandleFunc("/search", searchHandler)
 	http.Handle("/", http.FileServer(http.Dir("web/dist")))
-	fmt.Println("Сервер запущен на :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	fmt.Printf("Сервер запущен на :%s\n", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
