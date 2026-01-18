@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -54,17 +56,17 @@ func wildberries(query string) ([]byte, error) {
 		return nil, fmt.Errorf("[WB] ошибка cookiejar:%w", err)
 	}
 
-	// wd, _ := os.Getwd()
-	// path := filepath.Join(wd, "proxy.txt")
-	// dat, err := os.ReadFile(path)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("Cannot read file proxy.txt: %v", err)
-	// }
-	// proxyURL, _ := url.Parse(string(dat))
-	// transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	wd, _ := os.Getwd()
+	path := filepath.Join(wd, "proxy.txt")
+	dat, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("Cannot read file proxy.txt: %v", err)
+	}
+	proxyURL, _ := url.Parse(string(dat))
+	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
 	client := &http.Client{
-		// Transport: transport,
-		Timeout: 15 * time.Second,
+		Transport: transport,
+		Timeout:   15 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
