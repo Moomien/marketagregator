@@ -2,6 +2,7 @@ package ozon
 
 import (
 	"agregator/adapters/models"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -53,6 +54,43 @@ func warmUp(client *http.Client) error {
 	return nil
 }
 
+func loadCookies(jar *cookiejar.Jar) error {
+	wd, _ := os.Getwd()
+	path := filepath.Join(wd, "cookies.txt")
+	dat, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("Cannot read file cookies.txt: %v", err)
+	}
+	var items []struct {
+		Name           string `json:"name"`
+		Value          string `json:"value"`
+		Domain         string `json:"domain"`
+		Path           string `json:"path"`
+		Secure         bool   `json:"secure"`
+		HttpOnly       bool   `json:"httpOnly"`
+		ExpirationDate int64  `json:"expirationDate"`
+	}
+	if err := json.Unmarshal(dat, &items); err != nil {
+		return fmt.Errorf("Cannot unmarshal cookies.txt: %v", err)
+	}
+	uApi, _ := url.Parse("https://api.ozon.ru/")
+	uWWW, _ := url.Parse("https://www.ozon.ru/")
+	for _, c := range items {
+		ck := &http.Cookie{
+			Name:     c.Name,
+			Value:    c.Value,
+			Domain:   c.Domain,
+			Path:     c.Path,
+			Secure:   c.Secure,
+			HttpOnly: c.HttpOnly,
+			Expires:  time.Unix(c.ExpirationDate, 0),
+		}
+		jar.SetCookies(uApi, []*http.Cookie{ck})
+		jar.SetCookies(uWWW, []*http.Cookie{ck})
+	}
+	return nil
+}
+
 var globalCookie *cookiejar.Jar
 
 // json
@@ -66,6 +104,9 @@ func ozonResponse(query string) ([]byte, error) {
 		return nil, fmt.Errorf("[OZON] cookiejar:%w", err)
 	}
 	globalCookie = jar
+	if err := loadCookies(jar); err != nil {
+		return nil, fmt.Errorf("[OZON] load cookies err: %w", err)
+	}
 	wd, _ := os.Getwd()
 	path := filepath.Join(wd, "proxy.txt")
 	dat, err := os.ReadFile(path)
