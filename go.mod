@@ -1,6 +1,6 @@
 module agregator
 
-go 1.25.5
+go 1.25.0
 
 require (
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
