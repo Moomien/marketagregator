@@ -2,6 +2,7 @@ package wb
 
 import (
 	"agregator/adapters/models"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -62,8 +64,17 @@ func wildberries(query string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Cannot read file proxy.txt: %v", err)
 	}
-	proxyURL, _ := url.Parse(string(dat))
-	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	var transport *http.Transport
+	proxyStr := strings.TrimSpace(string(dat))
+	if proxyStr != "" {
+		proxyURL, _ := url.Parse(string(dat))
+		transport = &http.Transport{
+			Proxy:           http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	} else {
+		transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	}
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   15 * time.Second,

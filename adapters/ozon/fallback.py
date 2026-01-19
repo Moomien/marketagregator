@@ -220,7 +220,7 @@ def get_products_links(item_name: str) -> List[Dict[str, str]]:
     global _active_driver
     
     options = uc.ChromeOptions()
-    
+    options.add_argument("--headless")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--start-maximized")
     options.add_argument("--disable-dev-shm-usage")

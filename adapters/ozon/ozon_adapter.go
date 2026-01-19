@@ -2,6 +2,7 @@ package ozon
 
 import (
 	"agregator/adapters/models"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,22 +57,24 @@ func warmUp(client *http.Client) error {
 
 func loadCookies(jar *cookiejar.Jar) error {
 	wd, _ := os.Getwd()
-	path := filepath.Join(wd, "cookies.txt")
+	path := filepath.Join(wd, "cookies.json")
 	dat, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("Cannot read file cookies.txt: %v", err)
+		return fmt.Errorf("Cannot read file cookies.json: %v", err)
 	}
 	var items []struct {
-		Name           string `json:"name"`
-		Value          string `json:"value"`
-		Domain         string `json:"domain"`
-		Path           string `json:"path"`
-		Secure         bool   `json:"secure"`
-		HttpOnly       bool   `json:"httpOnly"`
-		ExpirationDate int64  `json:"expirationDate"`
+		Name           string  `json:"name"`
+		Value          string  `json:"value"`
+		Domain         string  `json:"domain"`
+		Path           string  `json:"path"`
+		Secure         bool    `json:"secure"`
+		HttpOnly       bool    `json:"httpOnly"`
+		ExpirationDate float64 `json:"expirationDate"`
+		SameSite       string  `json:"sameSite"`
+		Session        bool    `json:"session"`
 	}
 	if err := json.Unmarshal(dat, &items); err != nil {
-		return fmt.Errorf("Cannot unmarshal cookies.txt: %v", err)
+		return fmt.Errorf("Cannot unmarshal cookies.json: %v", err)
 	}
 	uApi, _ := url.Parse("https://api.ozon.ru/")
 	uWWW, _ := url.Parse("https://www.ozon.ru/")
@@ -83,21 +86,36 @@ func loadCookies(jar *cookiejar.Jar) error {
 			Path:     c.Path,
 			Secure:   c.Secure,
 			HttpOnly: c.HttpOnly,
-			Expires:  time.Unix(c.ExpirationDate, 0),
 		}
+		switch c.SameSite {
+		case "no_restriction":
+			ck.SameSite = http.SameSiteNoneMode
+		case "lax":
+			ck.SameSite = http.SameSiteLaxMode
+		case "strict":
+			ck.SameSite = http.SameSiteStrictMode
+		default:
+			ck.SameSite = http.SameSiteDefaultMode
+		}
+		if !c.Session && c.ExpirationDate > 0 {
+			sec := int64(c.ExpirationDate)
+			ck.Expires = time.Unix(sec, 0)
+		}
+
 		jar.SetCookies(uApi, []*http.Cookie{ck})
 		jar.SetCookies(uWWW, []*http.Cookie{ck})
 	}
+	fmt.Printf("[OZON] Cookies loaded!")
 	return nil
 }
 
 var globalCookie *cookiejar.Jar
 
-// json
+// получение json
 func ozonResponse(query string) ([]byte, error) {
 	searchpath := "/search?text=" + url.QueryEscape(query) + "&sorting=price&page=1"
 	apiUrl := "https://api.ozon.ru/composer-api.bx/page/json/v2?url=" + url.QueryEscape(searchpath)
-	referer := "https://www.ozon.ru/search/?text=" + url.QueryEscape(query)
+	referer := "https://www.ozon.ru/search/?text=" + url.QueryEscape(query) // для warmup
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -107,14 +125,24 @@ func ozonResponse(query string) ([]byte, error) {
 	if err := loadCookies(jar); err != nil {
 		return nil, fmt.Errorf("[OZON] load cookies err: %w", err)
 	}
+
 	wd, _ := os.Getwd()
 	path := filepath.Join(wd, "proxy.txt")
 	dat, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("Cannot read file proxy.txt: %v", err)
 	}
-	proxyURL, _ := url.Parse(string(dat))
-	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	var transport *http.Transport
+	proxyStr := strings.TrimSpace(string(dat))
+	if proxyStr != "" {
+		proxyURL, _ := url.Parse(string(dat))
+		transport = &http.Transport{
+			Proxy:           http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	} else {
+		transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	}
 
 	client := &http.Client{
 		Transport: transport,

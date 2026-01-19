@@ -22,56 +22,28 @@ import (
 )
 
 /* Программа реализует веб-сервер на Go для поиска товаров на маркетплейсах Ozon и Wildberries
-с использованием кэша Redis и возможностью fallback-парсинга через Python скрипт.
-
-Основные компоненты программы:
-
-1. Подключение к Redis:
-   - Через функцию initRedis() создаётся клиент Redis, который подключается к локальному серверу на порту 6379.
-   - Пытается подключиться несколько раз с интервалом в 2 секунды.
-   - Если подключение не удалось, программа продолжает работать, но без кэширования.
-
-2. Нормализация поискового запроса:
-   - Функция normalizeQuery() убирает лишние пробелы, приводит строку к нижнему регистру.
-   - Это позволяет одинаково обрабатывать запросы вроде " IPHONE  12 " и "iphone 12".
-
-3. Работа с Redis:
-   - saveToRedis() сохраняет список товаров в Redis в виде JSON на 1 час по нормализованному ключу запроса.
-   - getFromRedis() пытается получить список товаров из Redis. Если ключа нет — возвращает ошибку.
-
-4. Парсинг товаров (searchProducts):
-   - Сначала проверяется, есть ли данные в Redis. Если есть — возвращаются они.
-   - Если в кэше нет, данные собираются параллельно с Ozon и Wildberries с использованием goroutine и sync.WaitGroup.
-
-   - Ozon:
-     - Основной парсер: ozon.Parse(query).
-     - Если основной парсер падает, выполняется fallback через Python скрипт (fallback.py).
-     - Python скрипт возвращает JSON, который десериализуется в []models.Product.
-
-   - Wildberries:
-     - Парсер wb.Parse(query), ошибки логируются.
-
-   - После получения товаров:
-     - Объединяются результаты с Ozon и WB.
-     - Сортируются по цене (DiscountPrice) по возрастанию.
-     - Сохраняются в Redis для ускорения последующих запросов.
-
-5. HTTP обработчик searchHandler:
-   - Принимает GET-запрос на эндпоинт /search с параметром query.
-   - Нормализует query, вызывает searchProducts().
-   - Возвращает JSON с найденными товарами.
-   - В случае ошибки возвращает HTTP 400 (пустой или некорректный query) или 500 (ошибка поиска или парсинга).
-*/
+с использованием кэша Redis и возможностью fallback-парсинга через Python скрипт. */
 
 var (
 	ctx         = context.Background()
 	redisClient *redis.Client
 )
 
+// Cоздаётся клиент Redis, который подключается к локальному серверу на порту 6379.
+// Пытается подключиться несколько раз с интервалом в 2 секунды.
+// Если подключение не удалось, программа продолжает работать, но без кэширования.
 func initRedis() {
+	addr := os.Getenv("REDIS_ADDR")
+	if addr == "" {
+		addr = "localhost:6379"
+	}
+	pass := os.Getenv("REDIS_PASSWORD")
+	if pass == "" {
+		pass = ""
+	}
 	redisClient = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
+		Addr:     addr,
+		Password: pass,
 		DB:       0,
 	})
 	for i := 0; i <= 3; i++ {
@@ -86,6 +58,7 @@ func initRedis() {
 	log.Println("Работа без кэширования")
 }
 
+// убирает лишние пробелы, приводит строку к нижнему регистру. Это позволяет одинаково обрабатывать запросы вроде " IPHONE  12 " и "iphone 12"
 func normalizeQuery(q string) string {
 	q = strings.TrimSpace(q)
 	q = strings.ToLower(q)
@@ -95,6 +68,7 @@ func normalizeQuery(q string) string {
 	return q
 }
 
+// сохраняет список товаров в Redis в виде JSON на 1 час по нормализованному ключу запроса.
 func saveToRedis(query string, products []models.Product) error {
 	data, err := json.Marshal(products)
 	if err != nil {
@@ -105,6 +79,7 @@ func saveToRedis(query string, products []models.Product) error {
 	return err
 }
 
+// пытается получить список товаров из Redis. Если ключа нет — возвращает ошибку.
 func getFromRedis(query string) ([]models.Product, error) {
 	query = normalizeQuery(query)
 	val, err := redisClient.Get(ctx, query).Result()
@@ -118,6 +93,20 @@ func getFromRedis(query string) ([]models.Product, error) {
 	return products, err
 }
 
+// Сначала проверяется, есть ли данные в Redis. Если есть — возвращаются они.
+// Если в кэше нет, данные собираются параллельно с Ozon и Wildberries с использованием goroutine и sync.WaitGroup.
+// 1) Ozon:
+//   - Основной парсер: ozon.Parse(query).
+//   - Если основной парсер падает, выполняется fallback через Python скрипт (fallback.py).
+//   - Python скрипт возвращает JSON, который десериализуется в []models.Product.
+//
+// 2) Wildberries:
+//   - Парсер wb.Parse(query), ошибки логируются.
+//     После получения товаров:
+//
+// 3) Объединяются результаты с Ozon и WB.
+//   - Сортируются по цене (DiscountPrice) по возрастанию.
+//   - Сохраняются в Redis для ускорения последующих запросов.
 func searchProducts(query string) ([]models.Product, error) {
 	query = normalizeQuery(query)
 	cachedProducts, err := getFromRedis(query)
@@ -194,24 +183,29 @@ func searchProducts(query string) ([]models.Product, error) {
 	return items, nil
 }
 
+// HTTP обработчик searchHandler:
+// - Принимает GET-запрос на эндпоинт /search с параметром query.
+// - Нормализует query, вызывает searchProducts().
+// - Возвращает JSON с найденными товарами.
+// - В случае ошибки возвращает HTTP 400 (пустой или некорректный query) или 500 (ошибка поиска или парсинга).
 func searchHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("query")
 	query = normalizeQuery(query)
 	if query == "" {
-		http.Error(w, "Параметр query обязателен", http.StatusBadRequest)
+		http.Error(w, "Параметр query обязателен", http.StatusBadRequest) //400
 		return
 	}
 
 	products, err := searchProducts(query)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError) // 500
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	err = json.NewEncoder(w).Encode(products)
 	if err != nil {
-		http.Error(w, "ошибка кодирования ответа", http.StatusInternalServerError)
+		http.Error(w, "ошибка кодирования ответа", http.StatusInternalServerError) // 500
 	}
 }
 
