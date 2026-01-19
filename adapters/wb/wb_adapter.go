@@ -88,7 +88,7 @@ func wildberries(query string) ([]byte, error) {
 		return nil, fmt.Errorf("[WB] Warmup errors:%w", err)
 	}
 
-	for attempt := 0; attempt <= 30; attempt++ {
+	for attempt := 0; attempt <= 10; attempt++ {
 		fmt.Println("[WB] STEP:", attempt)
 		fmt.Println("[WB] URL:", apiUrl)
 		req, err := http.NewRequest("GET", apiUrl, nil)
