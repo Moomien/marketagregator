@@ -158,7 +158,7 @@ func ozonResponse(query string) ([]byte, error) {
 	}
 
 	current := apiUrl
-	for step := 0; step < 8; step++ {
+	for step := 0; step < 2; step++ {
 		fmt.Println("[OZON] Step:", step)
 		fmt.Println("[OZON] URL:", current)
 		seconds := rand.Intn(8) + 3
