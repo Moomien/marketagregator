@@ -75,15 +75,42 @@ export default function App() {
     search()
   }
 
+  const bestItem = items.length ? items.reduce((min, p) =>
+    parsePrice(p.product_discount_price) < parsePrice(min.product_discount_price) ? p : min,
+    items[0]
+  ) : null
+
+  function shopName(url: string) {
+    try {
+      const u = new URL(url)
+      const h = u.hostname
+      if (h.includes('ozon')) return 'Ozon'
+      if (h.includes('wildberries')) return 'Wildberries'
+      return h.replace('www.', '')
+    } catch {
+      return ''
+    }
+  }
+
+  const bestPriceText = bestItem ? `${bestItem.product_discount_price} — ${shopName(bestItem.product_url)}` : ''
+
   return (
     <div className="app">
       <header className="header">
         <div className="container">
+          <div className="brand">
+            <h1>Агрегатор цен</h1>
+            <p>Сравниваем цены из нескольких магазинов. Введите запрос — покажем лучшие предложения.</p>
+            <div className="badges">
+              <span className="badge">Ozon</span>
+              <span className="badge">Wildberries</span>
+            </div>
+          </div>
           <form className="search-bar" onSubmit={onSubmit}>
-            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Введите запрос" />
-            <button type="submit">Искать</button>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Введите запрос для сравнения цен" />
+            <button type="submit">Сравнить</button>
           </form>
-          <div className="meta">{items.length ? `Найдено: ${items.length} • Запрос: «${q}»` : ''}</div>
+          <div className="meta">{items.length ? `Найдено: ${items.length} • Лучшая цена: ${bestPriceText}` : 'Введите запрос, например «iphone 15»'}</div>
         </div>
       </header>
       <main className="container">
