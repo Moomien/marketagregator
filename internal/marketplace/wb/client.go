@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -19,14 +19,16 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-type Client struct{}
+type Client struct {
+	logger *slog.Logger
+}
 
-func New() *Client {
-	return &Client{}
+func New(logger *slog.Logger) *Client {
+	return &Client{logger: logger.With("marketplace", "wb")}
 }
 
 func (c *Client) Search(ctx context.Context, query string) ([]product.Product, error) {
-	body, err := wildberries(ctx, query)
+	body, err := c.wildberries(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("[WB] ошибка сбора json WB:%w", err)
 	}
@@ -56,7 +58,6 @@ func (c *Client) Search(ctx context.Context, query string) ([]product.Product, e
 		if stars != "" && reviews != "" {
 			statistic = stars + " • " + reviews
 		}
-		fmt.Println("[WB] Пытаюсь собрать линку для изображения")
 		vol := id / 100000
 		part := id / 1000
 		host := ""
@@ -160,7 +161,7 @@ func (c *Client) Search(ctx context.Context, query string) ([]product.Product, e
 	if parseErr != nil {
 		return nil, parseErr
 	}
-	fmt.Println("[WB] items:", len(products.Array()))
+	c.logger.Info("parsed products", "count", len(products.Array()))
 	return items, nil
 }
 
@@ -195,7 +196,7 @@ func warmUp(ctx context.Context, client *http.Client) error {
 	return nil
 }
 
-func wildberries(ctx context.Context, query string) ([]byte, error) {
+func (c *Client) wildberries(ctx context.Context, query string) ([]byte, error) {
 	apiUrl := "https://search.wb.ru/exactmatch/ru/common/v18/search?appType=1&curr=rub&dest=-1257786&lang=ru&page=1&query=" + url.QueryEscape(query) + "&resultset=catalog&sort=priceup&spp=30"
 	referer := "https://www.wildberries.ru/catalog/0/search.aspx?search=" + url.QueryEscape(query)
 
@@ -204,24 +205,16 @@ func wildberries(ctx context.Context, query string) ([]byte, error) {
 		return nil, fmt.Errorf("[WB] ошибка cookiejar:%w", err)
 	}
 
-	wd, _ := os.Getwd()
-	path := filepath.Join(wd, "proxy.txt")
-	dat, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("Cannot read file proxy.txt: %v", err)
-	}
-	var transport *http.Transport
-	proxyStr := strings.TrimSpace(string(dat))
-	if proxyStr != "" {
-		proxyURL, err := url.Parse(proxyStr)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	proxyURLText := strings.TrimSpace(os.Getenv("PROXY_URL"))
+	if proxyURLText != "" {
+		proxyURL, err := url.Parse(proxyURLText)
 		if err != nil {
-			return nil, fmt.Errorf("[WB] parse proxy URL: %w", err)
+			return nil, fmt.Errorf("parse PROXY_URL: %w", err)
 		}
-		transport = &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
-		}
-	} else {
-		transport = &http.Transport{}
+		transport.Proxy = http.ProxyURL(proxyURL)
+		c.logger.Info("using proxy from environment")
 	}
 	client := &http.Client{
 		Transport: transport,
@@ -237,12 +230,10 @@ func wildberries(ctx context.Context, query string) ([]byte, error) {
 	}
 
 	for attempt := 0; attempt <= 10; attempt++ {
-		fmt.Println("[WB] STEP:", attempt)
-		fmt.Println("[WB] URL:", apiUrl)
+		c.logger.Debug("request attempt", "attempt", attempt+1, "url", apiUrl)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiUrl, nil)
 		if err != nil {
-			fmt.Println("[WB] GET request err:", err)
-			continue
+			return nil, fmt.Errorf("create request: %w", err)
 		}
 		setHeaders(req, referer)
 		resp, err := client.Do(req)
@@ -250,19 +241,18 @@ func wildberries(ctx context.Context, query string) ([]byte, error) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			fmt.Println("[WB] Client error:", err)
+			c.logger.Warn("request failed", "attempt", attempt+1, "error", err)
 			continue
 		}
 
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			fmt.Println("[WB] ошибка чтения resp.body")
-			continue
+			return nil, fmt.Errorf("read response body: %w", err)
 		}
 
 		if resp.StatusCode == 200 {
-			fmt.Println("WB RESPONSE OK:\n", resp.Status)
+			c.logger.Debug("request completed", "status", resp.StatusCode)
 			return body, nil
 		}
 		if err := wait(ctx, 2*time.Second); err != nil {
@@ -273,9 +263,9 @@ func wildberries(ctx context.Context, query string) ([]byte, error) {
 			if len(s) > 1000 {
 				s = s[:1000]
 			}
-			fmt.Println("[WB] resp status code != 200. last body snippet:", s)
+			c.logger.Debug("response body", "body", s)
 		}
-		fmt.Println("WB unexpected status:", resp.Status)
+		c.logger.Warn("unexpected response status", "status", resp.StatusCode)
 	}
 	return nil, errors.New("[WB]  не удалось получить данные")
 }

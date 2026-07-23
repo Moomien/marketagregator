@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"log"
+	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -17,13 +18,14 @@ import (
 const searchTimeout = 60 * time.Second
 
 func main() {
-	redisCache := connectRedis()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	redisCache := connectRedis(logger)
 	if redisCache != nil {
 		defer redisCache.Close()
 	}
 
-	service := search.New(redisCache, ozon.New(), wb.New())
-	handler := httpapi.New(service, searchTimeout)
+	service := search.New(logger.With("component", "search"), redisCache, ozon.New(logger), wb.New(logger))
+	handler := httpapi.New(logger.With("component", "http"), service, searchTimeout)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/search", handler.Search)
@@ -43,29 +45,31 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	log.Printf("server started on :%s", port)
-	log.Fatal(server.ListenAndServe())
+	logger.Info("server started", "address", server.Addr)
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Error("server stopped unexpectedly", "error", err)
+	}
 }
 
-func connectRedis() *cache.Redis {
+func connectRedis(logger *slog.Logger) *cache.Redis {
 	redisCache := cache.NewFromEnv()
 	for attempt := 1; attempt <= 4; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		err := redisCache.Ping(ctx)
 		cancel()
 		if err == nil {
-			log.Println("connected to Redis")
+			logger.Info("connected to Redis")
 			return redisCache
 		}
-		log.Printf("Redis connection attempt %d failed: %v", attempt, err)
+		logger.Warn("Redis connection attempt failed", "attempt", attempt, "error", err)
 		if attempt < 4 {
 			time.Sleep(2 * time.Second)
 		}
 	}
 
 	if err := redisCache.Close(); err != nil {
-		log.Printf("close Redis client: %v", err)
+		logger.Warn("close Redis client", "error", err)
 	}
-	log.Println("starting without cache")
+	logger.Warn("starting without cache")
 	return nil
 }

@@ -15,17 +15,6 @@ uc.Chrome.__del__ = lambda self: None
 
 _active_driver = None
 
-"""
-Программа открывает поиск Ozon по заданному запросу, собирает ссылки карточек, 
-затем по каждой ссылке загружает страницу товара, извлекает HTML и парсит его с помощью BeautifulSoup. 
-Извлекаются поля: product_url, image_url (основное изображение из галереи товара), product_id (артикул), 
-product_name, цены product_discount_price, product_base_price, 
-product_statistic (средняя оценка + количество отзывов), product_stars (средняя оценка), product_reviews (количество отзывов).
-статистика и отзывы. 
-Выводится один JSON-массив товаров в stdout, который используется в main.go для сохранения в бд.   
-Запуск(пример): python adapters/ozon/fallback.py "iphone 15".
-"""
-
 def _cleanup_driver():
     global _active_driver
     if _active_driver:

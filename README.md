@@ -53,7 +53,7 @@
 - Go: см. [go.mod](./go.mod#L1-L12) (redis v8, gjson и др.)
 - Redis: локально на localhost:6379 (или другой адрес через переменные окружения)
 - Node.js: фронтенд React/Vite/TS [package.json](./web/package.json#L1-L23)
-- Прокси: строка в [proxy.txt](./proxy.txt) для доступа к API источников
+- `PROXY_URL`: необязательный URL proxy для запросов к маркетплейсам, например `http://user:password@host:port`
 - Необязательно: Python fallback для Ozon (Chromedriver + BS4) [requirements.txt](./requirements.txt#L1-L4)
 
 
@@ -79,6 +79,8 @@ go run main.go
   - PORT — порт HTTP (по умолчанию 8080)
   - REDIS_ADDR — адрес Redis (по умолчанию localhost:6379)
   - REDIS_PASSWORD — пароль Redis (если требуется)
+  - OZON_COOKIES_FILE — необязательный путь к JSON-экспорту cookies для Ozon. Если переменная не задана, Ozon запускается без cookies.
+  - PROXY_URL — необязательный URL proxy для Ozon и Wildberries.
 
 **Скриншот работы**
 ![alt text](./images/image.png)

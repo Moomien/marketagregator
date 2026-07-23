@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,14 +21,16 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-type Client struct{}
+type Client struct {
+	logger *slog.Logger
+}
 
-func New() *Client {
-	return &Client{}
+func New(logger *slog.Logger) *Client {
+	return &Client{logger: logger.With("marketplace", "ozon")}
 }
 
 func (c *Client) Search(ctx context.Context, query string) ([]product.Product, error) {
-	ozon, err := ozonResponse(ctx, query)
+	ozon, err := c.ozonResponse(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("[OZON] json collection error:%w", err)
 	}
@@ -55,7 +57,7 @@ func (c *Client) Search(ctx context.Context, query string) ([]product.Product, e
 		return nil, fmt.Errorf("[OZON_parsing] items not found or not array")
 	}
 
-	fmt.Println("items:", len(items.Array()))
+	c.logger.Info("parsed products", "count", len(items.Array()))
 
 	var (
 		products []product.Product
@@ -184,12 +186,10 @@ func warmUp(ctx context.Context, client *http.Client) error {
 	return nil
 }
 
-func loadCookies(jar *cookiejar.Jar) error {
-	wd, _ := os.Getwd()
-	path := filepath.Join(wd, "cookies.json")
+func loadCookies(logger *slog.Logger, jar *cookiejar.Jar, path string) error {
 	dat, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("Cannot read file cookies.json: %v", err)
+		return fmt.Errorf("read cookies file: %w", err)
 	}
 	var items []struct {
 		Name           string  `json:"name"`
@@ -203,7 +203,7 @@ func loadCookies(jar *cookiejar.Jar) error {
 		Session        bool    `json:"session"`
 	}
 	if err := json.Unmarshal(dat, &items); err != nil {
-		return fmt.Errorf("Cannot unmarshal cookies.json: %v", err)
+		return fmt.Errorf("decode cookies file: %w", err)
 	}
 	uApi, _ := url.Parse("https://api.ozon.ru/")
 	uWWW, _ := url.Parse("https://www.ozon.ru/")
@@ -234,14 +234,12 @@ func loadCookies(jar *cookiejar.Jar) error {
 		jar.SetCookies(uApi, []*http.Cookie{ck})
 		jar.SetCookies(uWWW, []*http.Cookie{ck})
 	}
-	fmt.Printf("[OZON] Cookies loaded!")
+	logger.Debug("cookies loaded", "count", len(items))
 	return nil
 }
 
-var globalCookie *cookiejar.Jar
-
 // получение json
-func ozonResponse(ctx context.Context, query string) ([]byte, error) {
+func (c *Client) ozonResponse(ctx context.Context, query string) ([]byte, error) {
 	searchpath := "/search?text=" + url.QueryEscape(query) + "&sorting=price&page=1"
 	apiUrl := "https://api.ozon.ru/composer-api.bx/page/json/v2?url=" + url.QueryEscape(searchpath)
 	referer := "https://www.ozon.ru/search/?text=" + url.QueryEscape(query) // для warmup
@@ -250,29 +248,25 @@ func ozonResponse(ctx context.Context, query string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("[OZON] cookiejar:%w", err)
 	}
-	globalCookie = jar
-	if err := loadCookies(jar); err != nil {
-		return nil, fmt.Errorf("[OZON] load cookies err: %w", err)
-	}
-
-	wd, _ := os.Getwd()
-	path := filepath.Join(wd, "proxy.txt")
-	dat, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("Cannot read file proxy.txt: %v", err)
-	}
-	var transport *http.Transport
-	proxyStr := strings.TrimSpace(string(dat))
-	if proxyStr != "" {
-		proxyURL, err := url.Parse(proxyStr)
-		if err != nil {
-			return nil, fmt.Errorf("[OZON] parse proxy URL: %w", err)
-		}
-		transport = &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
+	cookiesFile := strings.TrimSpace(os.Getenv("OZON_COOKIES_FILE"))
+	if cookiesFile != "" {
+		if err := loadCookies(c.logger, jar, cookiesFile); err != nil {
+			return nil, fmt.Errorf("load Ozon cookies: %w", err)
 		}
 	} else {
-		transport = &http.Transport{}
+		c.logger.Debug("starting without cookies")
+	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	proxyURLText := strings.TrimSpace(os.Getenv("PROXY_URL"))
+	if proxyURLText != "" {
+		proxyURL, err := url.Parse(proxyURLText)
+		if err != nil {
+			return nil, fmt.Errorf("parse PROXY_URL: %w", err)
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+		c.logger.Info("using proxy from environment")
 	}
 
 	client := &http.Client{
@@ -281,7 +275,7 @@ func ozonResponse(ctx context.Context, query string) ([]byte, error) {
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
-		Jar: globalCookie,
+		Jar: jar,
 	}
 
 	if err := warmUp(ctx, client); err != nil {
@@ -290,8 +284,7 @@ func ozonResponse(ctx context.Context, query string) ([]byte, error) {
 
 	current := apiUrl
 	for step := 0; step < 2; step++ {
-		fmt.Println("[OZON] Step:", step)
-		fmt.Println("[OZON] URL:", current)
+		c.logger.Debug("request attempt", "attempt", step+1, "url", current)
 		seconds := rand.Intn(8) + 3
 		if err := wait(ctx, time.Duration(seconds)*time.Second); err != nil {
 			return nil, err
@@ -329,20 +322,20 @@ func ozonResponse(ctx context.Context, query string) ([]byte, error) {
 		body, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
-			fmt.Println("[OZON] read error:", readErr)
+			return nil, fmt.Errorf("read response body: %w", readErr)
 		}
 
 		if resp.StatusCode == 200 {
-			fmt.Println("OZON OK", resp.Status)
+			c.logger.Debug("request completed", "status", resp.StatusCode)
 			return body, nil
 		}
-		fmt.Println("[OZON] Unexpected status:", resp.Status)
+		c.logger.Warn("unexpected response status", "status", resp.StatusCode)
 		if len(body) > 0 {
 			s := string(body)
 			if len(s) > 1000 {
 				s = s[:1000]
 			}
-			fmt.Println("Body snippet:\n", s)
+			c.logger.Debug("response body", "body", s)
 		}
 	}
 	return nil, errors.New("[OZON]  не удалось получить данные")

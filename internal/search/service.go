@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -25,10 +26,11 @@ type Cache interface {
 type Service struct {
 	cache        Cache
 	marketplaces []Marketplace
+	logger       *slog.Logger
 }
 
-func New(cache Cache, marketplaces ...Marketplace) *Service {
-	return &Service{cache: cache, marketplaces: marketplaces}
+func New(logger *slog.Logger, cache Cache, marketplaces ...Marketplace) *Service {
+	return &Service{logger: logger, cache: cache, marketplaces: marketplaces}
 }
 
 func (s *Service) Search(ctx context.Context, query string) ([]product.Product, error) {
@@ -36,8 +38,10 @@ func (s *Service) Search(ctx context.Context, query string) ([]product.Product, 
 	if s.cache != nil {
 		products, err := s.cache.Get(ctx, query)
 		if err == nil {
+			s.logger.Debug("cache hit", "query", query, "products", len(products))
 			return products, nil
 		}
+		s.logger.Debug("cache unavailable", "query", query, "error", err)
 	}
 
 	products, errs := s.fetch(ctx, query)
@@ -47,13 +51,18 @@ func (s *Service) Search(ctx context.Context, query string) ([]product.Product, 
 		}
 		return nil, ErrProductsNotFound
 	}
+	for _, err := range errs {
+		s.logger.Warn("marketplace search failed", "query", query, "error", err)
+	}
 
 	sort.Slice(products, func(i, j int) bool {
 		return products[i].DiscountPriceKopecks < products[j].DiscountPriceKopecks
 	})
 
 	if s.cache != nil {
-		_ = s.cache.Set(ctx, query, products)
+		if err := s.cache.Set(ctx, query, products); err != nil {
+			s.logger.Warn("save search result to cache", "query", query, "error", err)
+		}
 	}
 	return products, nil
 }
