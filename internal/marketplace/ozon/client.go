@@ -34,7 +34,15 @@ func (c *Client) Search(ctx context.Context, query string) ([]product.Product, e
 	if err != nil {
 		return nil, fmt.Errorf("[OZON] json collection error:%w", err)
 	}
+	products, err := parseProducts(ozon)
+	if err != nil {
+		return nil, err
+	}
+	c.logger.Info("parsed products", "count", len(products))
+	return products, nil
+}
 
+func parseProducts(ozon []byte) ([]product.Product, error) {
 	root := gjson.ParseBytes(ozon)
 
 	var tileKey string
@@ -57,12 +65,11 @@ func (c *Client) Search(ctx context.Context, query string) ([]product.Product, e
 		return nil, fmt.Errorf("[OZON_parsing] items not found or not array")
 	}
 
-	c.logger.Info("parsed products", "count", len(items.Array()))
-
 	var (
 		products []product.Product
 		parseErr error
 	)
+
 	items.ForEach(func(_, item gjson.Result) bool {
 		sku := item.Get("sku").String()
 		link := item.Get("action.link").String()

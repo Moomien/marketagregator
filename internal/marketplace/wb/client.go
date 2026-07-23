@@ -32,6 +32,15 @@ func (c *Client) Search(ctx context.Context, query string) ([]product.Product, e
 	if err != nil {
 		return nil, fmt.Errorf("[WB] ошибка сбора json WB:%w", err)
 	}
+	products, err := parseProducts(body)
+	if err != nil {
+		return nil, err
+	}
+	c.logger.Info("parsed products", "count", len(products))
+	return products, nil
+}
+
+func parseProducts(body []byte) ([]product.Product, error) {
 	root := gjson.ParseBytes(body)
 	products := root.Get("products")
 	if !products.Exists() || !products.IsArray() {
@@ -42,6 +51,7 @@ func (c *Client) Search(ctx context.Context, query string) ([]product.Product, e
 		items    []product.Product
 		parseErr error
 	)
+
 	products.ForEach(func(_, products gjson.Result) bool {
 		id := products.Get("id").Int()
 		link := "https://www.wildberries.ru/catalog/" + strconv.FormatInt(id, 10) + "/detail.aspx"
@@ -161,7 +171,6 @@ func (c *Client) Search(ctx context.Context, query string) ([]product.Product, e
 	if parseErr != nil {
 		return nil, parseErr
 	}
-	c.logger.Info("parsed products", "count", len(products.Array()))
 	return items, nil
 }
 
