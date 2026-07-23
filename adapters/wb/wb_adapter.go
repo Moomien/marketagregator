@@ -2,7 +2,7 @@ package wb
 
 import (
 	"agregator/adapters/models"
-	"crypto/tls"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -33,8 +33,8 @@ func setHeaders(req *http.Request, referer string) {
 	}
 }
 
-func warmUp(client *http.Client) error {
-	req, err := http.NewRequest("GET", "https://www.wildberries.ru/", nil)
+func warmUp(ctx context.Context, client *http.Client) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.wildberries.ru/", nil)
 	if err != nil {
 		return err
 	}
@@ -49,7 +49,7 @@ func warmUp(client *http.Client) error {
 	return nil
 }
 
-func wildberries(query string) ([]byte, error) {
+func wildberries(ctx context.Context, query string) ([]byte, error) {
 	apiUrl := "https://search.wb.ru/exactmatch/ru/common/v18/search?appType=1&curr=rub&dest=-1257786&lang=ru&page=1&query=" + url.QueryEscape(query) + "&resultset=catalog&sort=priceup&spp=30"
 	referer := "https://www.wildberries.ru/catalog/0/search.aspx?search=" + url.QueryEscape(query)
 
@@ -67,13 +67,15 @@ func wildberries(query string) ([]byte, error) {
 	var transport *http.Transport
 	proxyStr := strings.TrimSpace(string(dat))
 	if proxyStr != "" {
-		proxyURL, _ := url.Parse(string(dat))
+		proxyURL, err := url.Parse(proxyStr)
+		if err != nil {
+			return nil, fmt.Errorf("[WB] parse proxy URL: %w", err)
+		}
 		transport = &http.Transport{
-			Proxy:           http.ProxyURL(proxyURL),
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			Proxy: http.ProxyURL(proxyURL),
 		}
 	} else {
-		transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+		transport = &http.Transport{}
 	}
 	client := &http.Client{
 		Transport: transport,
@@ -84,14 +86,14 @@ func wildberries(query string) ([]byte, error) {
 		Jar: jar,
 	}
 
-	if err := warmUp(client); err != nil {
+	if err := warmUp(ctx, client); err != nil {
 		return nil, fmt.Errorf("[WB] Warmup errors:%w", err)
 	}
 
 	for attempt := 0; attempt <= 10; attempt++ {
 		fmt.Println("[WB] STEP:", attempt)
 		fmt.Println("[WB] URL:", apiUrl)
-		req, err := http.NewRequest("GET", apiUrl, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiUrl, nil)
 		if err != nil {
 			fmt.Println("[WB] GET request err:", err)
 			continue
@@ -99,11 +101,15 @@ func wildberries(query string) ([]byte, error) {
 		setHeaders(req, referer)
 		resp, err := client.Do(req)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			fmt.Println("[WB] Client error:", err)
 			continue
 		}
 
 		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			fmt.Println("[WB] ошибка чтения resp.body")
 			continue
@@ -113,23 +119,35 @@ func wildberries(query string) ([]byte, error) {
 			fmt.Println("WB RESPONSE OK:\n", resp.Status)
 			return body, nil
 		}
-		resp.Body.Close()
-		time.Sleep(time.Second * 2)
+		if err := wait(ctx, 2*time.Second); err != nil {
+			return nil, err
+		}
 		if len(body) > 0 {
 			s := string(body)
-			if len(s) > 500 {
+			if len(s) > 1000 {
 				s = s[:1000]
 			}
 			fmt.Println("[WB] resp status code != 200. last body snippet:", s)
 		}
 		fmt.Println("WB unexpected status:", resp.Status)
-		resp.Body.Close()
 	}
 	return nil, errors.New("[WB]  не удалось получить данные")
 }
 
-func Parse(query string) ([]models.Product, error) {
-	body, err := wildberries(query)
+func wait(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func Parse(ctx context.Context, query string) ([]models.Product, error) {
+	body, err := wildberries(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("[WB] ошибка сбора json WB:%w", err)
 	}
@@ -238,17 +256,6 @@ func Parse(query string) ([]models.Product, error) {
 		pic := fmt.Sprintf(
 			"https://basket-%s.wbbasket.ru/vol%d/part%d/%d/images/big/1.webp",
 			host, vol, part, id)
-
-		resp, err := http.Get(pic)
-		fmt.Println("[WB] послал запрос к изображению")
-		if err != nil {
-			fmt.Println("[WB] ошибка запроса к изображению:", err)
-		}
-		if resp.StatusCode != 200 {
-			resp.Body.Close()
-		} else {
-			fmt.Println("[WB] успех запроса к изображению")
-		}
 
 		p := models.Product{
 			Link:             link,

@@ -25,9 +25,10 @@ import (
 с использованием кэша Redis и возможностью fallback-парсинга через Python скрипт. */
 
 var (
-	ctx         = context.Background()
 	redisClient *redis.Client
 )
+
+const searchTimeout = 60 * time.Second
 
 // Cоздаётся клиент Redis, который подключается к локальному серверу на порту 6379.
 // Пытается подключиться несколько раз с интервалом в 2 секунды.
@@ -47,7 +48,9 @@ func initRedis() {
 		DB:       0,
 	})
 	for i := 0; i <= 3; i++ {
-		_, err := redisClient.Ping(ctx).Result()
+		pingCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_, err := redisClient.Ping(pingCtx).Result()
+		cancel()
 		if err == nil {
 			log.Println("Подключено к Redis")
 			return
@@ -69,7 +72,7 @@ func normalizeQuery(q string) string {
 }
 
 // сохраняет список товаров в Redis в виде JSON на 1 час по нормализованному ключу запроса.
-func saveToRedis(query string, products []models.Product) error {
+func saveToRedis(ctx context.Context, query string, products []models.Product) error {
 	data, err := json.Marshal(products)
 	if err != nil {
 		return err
@@ -80,7 +83,7 @@ func saveToRedis(query string, products []models.Product) error {
 }
 
 // пытается получить список товаров из Redis. Если ключа нет — возвращает ошибку.
-func getFromRedis(query string) ([]models.Product, error) {
+func getFromRedis(ctx context.Context, query string) ([]models.Product, error) {
 	query = normalizeQuery(query)
 	val, err := redisClient.Get(ctx, query).Result()
 	if err == redis.Nil {
@@ -107,9 +110,9 @@ func getFromRedis(query string) ([]models.Product, error) {
 // 3) Объединяются результаты с Ozon и WB.
 //   - Сортируются по цене (DiscountPrice) по возрастанию.
 //   - Сохраняются в Redis для ускорения последующих запросов.
-func searchProducts(query string) ([]models.Product, error) {
+func searchProducts(ctx context.Context, query string) ([]models.Product, error) {
 	query = normalizeQuery(query)
-	cachedProducts, err := getFromRedis(query)
+	cachedProducts, err := getFromRedis(ctx, query)
 	if err == nil {
 		fmt.Printf("Использован кэш для запроса %s\n", query)
 		return cachedProducts, nil
@@ -126,7 +129,7 @@ func searchProducts(query string) ([]models.Product, error) {
 
 	go func() {
 		defer wg.Done()
-		itemsOzon, errOzon = ozon.Parse(query)
+		itemsOzon, errOzon = ozon.Parse(ctx, query)
 		if errOzon != nil {
 			// fmt.Println("[OZON] стартую фолбэк")
 			// cmd := exec.Command("python3", "./adapters/ozon/fallback.py", query)
@@ -148,7 +151,7 @@ func searchProducts(query string) ([]models.Product, error) {
 
 	go func() {
 		defer wg.Done()
-		itemWB, errWB = wb.Parse(query)
+		itemWB, errWB = wb.Parse(ctx, query)
 		if errWB != nil {
 			errWB = fmt.Errorf("[WB] Не удалось спарсить wb:%w", errWB)
 		}
@@ -175,7 +178,7 @@ func searchProducts(query string) ([]models.Product, error) {
 		return pi < pj
 	})
 
-	err = saveToRedis(query, items)
+	err = saveToRedis(ctx, query, items)
 	if err != nil {
 		fmt.Printf("не удалось сохранить в Redis: %v", err)
 	}
@@ -196,7 +199,10 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	products, err := searchProducts(query)
+	ctx, cancel := context.WithTimeout(r.Context(), searchTimeout)
+	defer cancel()
+
+	products, err := searchProducts(ctx, query)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError) // 500
 		return
@@ -218,5 +224,13 @@ func main() {
 		port = "8080"
 	}
 	fmt.Printf("Сервер запущен на :%s\n", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	server := &http.Server{
+		Addr:              ":" + port,
+		Handler:           nil,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      90 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	log.Fatal(server.ListenAndServe())
 }

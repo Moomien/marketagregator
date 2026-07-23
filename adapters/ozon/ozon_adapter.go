@@ -2,7 +2,7 @@ package ozon
 
 import (
 	"agregator/adapters/models"
-	"crypto/tls"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,8 +40,8 @@ func setHeaders(req *http.Request, referer string) {
 
 }
 
-func warmUp(client *http.Client) error {
-	req, err := http.NewRequest("GET", "https://www.ozon.ru/", nil)
+func warmUp(ctx context.Context, client *http.Client) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.ozon.ru/", nil)
 	if err != nil {
 		return err
 	}
@@ -112,7 +112,7 @@ func loadCookies(jar *cookiejar.Jar) error {
 var globalCookie *cookiejar.Jar
 
 // получение json
-func ozonResponse(query string) ([]byte, error) {
+func ozonResponse(ctx context.Context, query string) ([]byte, error) {
 	searchpath := "/search?text=" + url.QueryEscape(query) + "&sorting=price&page=1"
 	apiUrl := "https://api.ozon.ru/composer-api.bx/page/json/v2?url=" + url.QueryEscape(searchpath)
 	referer := "https://www.ozon.ru/search/?text=" + url.QueryEscape(query) // для warmup
@@ -135,13 +135,15 @@ func ozonResponse(query string) ([]byte, error) {
 	var transport *http.Transport
 	proxyStr := strings.TrimSpace(string(dat))
 	if proxyStr != "" {
-		proxyURL, _ := url.Parse(string(dat))
+		proxyURL, err := url.Parse(proxyStr)
+		if err != nil {
+			return nil, fmt.Errorf("[OZON] parse proxy URL: %w", err)
+		}
 		transport = &http.Transport{
-			Proxy:           http.ProxyURL(proxyURL),
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			Proxy: http.ProxyURL(proxyURL),
 		}
 	} else {
-		transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+		transport = &http.Transport{}
 	}
 
 	client := &http.Client{
@@ -153,7 +155,7 @@ func ozonResponse(query string) ([]byte, error) {
 		Jar: globalCookie,
 	}
 
-	if err := warmUp(client); err != nil {
+	if err := warmUp(ctx, client); err != nil {
 		return nil, fmt.Errorf("[OZON] warmup: %w", err)
 	}
 
@@ -162,8 +164,10 @@ func ozonResponse(query string) ([]byte, error) {
 		fmt.Println("[OZON] Step:", step)
 		fmt.Println("[OZON] URL:", current)
 		seconds := rand.Intn(8) + 3
-		time.Sleep(time.Duration(seconds) * time.Second)
-		req, err := http.NewRequest("GET", current, nil)
+		if err := wait(ctx, time.Duration(seconds)*time.Second); err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, current, nil)
 		if err != nil {
 			return nil, fmt.Errorf("[OZON] new request: %w", err)
 		}
@@ -187,7 +191,9 @@ func ozonResponse(query string) ([]byte, error) {
 				loc = "https://api.ozon.ru/" + loc
 			}
 			current = loc
-			time.Sleep(time.Second * 2)
+			if err := wait(ctx, 2*time.Second); err != nil {
+				return nil, err
+			}
 			continue
 		}
 
@@ -214,6 +220,18 @@ func ozonResponse(query string) ([]byte, error) {
 
 }
 
+func wait(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func getMainStateText(item gjson.Result, stateType string) gjson.Result {
 	var found gjson.Result
 	item.Get("mainState").ForEach(func(_, st gjson.Result) bool {
@@ -236,8 +254,8 @@ func normalizeText(s string) string {
 	return s
 }
 
-func Parse(query string) ([]models.Product, error) {
-	ozon, err := ozonResponse(query)
+func Parse(ctx context.Context, query string) ([]models.Product, error) {
+	ozon, err := ozonResponse(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("[OZON] json collection error:%w", err)
 	}
