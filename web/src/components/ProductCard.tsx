@@ -5,8 +5,8 @@ type Product = {
   image_url: string
   product_id: string
   product_name: string
-  product_discount_price: string
-  product_base_price: string
+  product_discount_price: number
+  product_base_price: number
   product_statistic: string
   product_stars: string
   product_reviews: string
@@ -29,17 +29,22 @@ function renderStars(stars: number | null) {
   return '★'.repeat(full) + (half ? '☆' : '') + '☆'.repeat(empty)
 }
 
-function normalizePrice(p: string) {
-  if (!p) return ''
-  return String(p).replace(/\s+/g, ' ').trim()
+function formatPrice(kopecks: number) {
+  if (!kopecks) return ''
+  return new Intl.NumberFormat('ru-RU', {
+    style: 'currency',
+    currency: 'RUB',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(kopecks / 100)
 }
 
 export default function ProductCard({ product }: Props) {
   const link = product.product_url
   const img = product.image_url
   const name = product.product_name
-  const priceNow = normalizePrice(product.product_discount_price)
-  const priceOld = normalizePrice(product.product_base_price)
+  const priceNow = formatPrice(product.product_discount_price)
+  const priceOld = formatPrice(product.product_base_price)
   const starsVal = parseStars(product.product_stars)
   const reviewsText = product.product_reviews
   const statistic = product.product_statistic

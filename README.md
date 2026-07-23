@@ -83,4 +83,20 @@ go run main.go
 **Скриншот работы**
 ![alt text](./images/image.png)
 
+## Redis with Docker
+
+Start Redis for local development:
+
+```bash
+make redis-up
+```
+
+The application connects to `localhost:6379` by default. Other useful commands:
+
+```bash
+make redis-logs
+make redis-cli
+make redis-down
+```
+
 

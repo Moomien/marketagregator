@@ -6,8 +6,8 @@ type Product = {
   image_url: string
   product_id: string
   product_name: string
-  product_discount_price: string
-  product_base_price: string
+  product_discount_price: number
+  product_base_price: number
   product_statistic: string
   product_stars: string
   product_reviews: string
@@ -19,11 +19,13 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [items, setItems] = useState<Product[]>([])
 
-  function parsePrice(s: string) {
-    const cleaned = String(s || '').replace(/[^\d.,]/g, '').replace(/\s+/g, '')
-    const normalized = cleaned.replace(',', '.')
-    const n = parseFloat(normalized)
-    return isNaN(n) ? Infinity : n
+  function formatPrice(kopecks: number) {
+    return new Intl.NumberFormat('ru-RU', {
+      style: 'currency',
+      currency: 'RUB',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }).format(kopecks / 100)
   }
 
   function normalizeText(s: string) {
@@ -61,7 +63,7 @@ export default function App() {
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const data: Product[] = await r.json()
       const filtered = data.filter(p => matchesQuery(p.product_name, q))
-      const sorted = [...filtered].sort((a, b) => parsePrice(a.product_discount_price) - parsePrice(b.product_discount_price))
+      const sorted = [...filtered].sort((a, b) => a.product_discount_price - b.product_discount_price)
       setItems(sorted)
     } catch (e: any) {
       setError(e.message || 'Ошибка')
@@ -76,7 +78,7 @@ export default function App() {
   }
 
   const bestItem = items.length ? items.reduce((min, p) =>
-    parsePrice(p.product_discount_price) < parsePrice(min.product_discount_price) ? p : min,
+    p.product_discount_price < min.product_discount_price ? p : min,
     items[0]
   ) : null
 
@@ -92,7 +94,7 @@ export default function App() {
     }
   }
 
-  const bestPriceText = bestItem ? `${bestItem.product_discount_price} — ${shopName(bestItem.product_url)}` : ''
+  const bestPriceText = bestItem ? `${formatPrice(bestItem.product_discount_price)} — ${shopName(bestItem.product_url)}` : ''
 
   return (
     <div className="app">
